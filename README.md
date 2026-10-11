@@ -40,17 +40,22 @@
 
 # 🧶 What is monorepo-networker?
 
-Consider a scenario where you maintain a codebase following the monorepo pattern, with an IPC-esque communication mechanism between sides—similar to [FiveM's Scripting SDK](https://www.figma.com/plugin-docs/) or [Figma's Plugin API](https://docs.fivem.net/docs/scripting-reference/). In such cases, you may encounter excessive boilerplate code just to ensure that the correct data is sent under the appropriate title. This library aims to simplify that process by abstracting transport strategies between sides, thereby standardizing communication.
+Consider a scenario where you maintain a codebase following the monorepo pattern, with an IPC-esque communication mechanism 
+between sides—similar to [FiveM's Scripting SDK](https://www.figma.com/plugin-docs/), [Figma's Plugin API](https://docs.fivem.net/docs/scripting-reference/) or [Tauri's Event API](https://tauri.app/develop/calling-rust/).
+In such cases, you may encounter excessive boilerplate code just to ensure that the correct data is sent under the appropriate title. This library aims to simplify that process by abstracting transport strategies between sides, thereby standardizing communication.
 
 # 🎁 Examples
 
 - [Simple Example](https://github.com/iGoodie/monorepo-networker/tree/master/examples/simple): with 3 mockup sides: midware "Client", HTTP "Server" and React "UI"
 - [Figma Plugin Example](https://github.com/iGoodie/monorepo-networker/tree/master/examples/figma-plugin): with 2 sides: figma "Plugin", and the renderer "UI"
 - [FiveM Server Example](https://github.com/iGoodie/monorepo-networker/tree/master/examples/fivem-script): with 3 sides: resource "Server", resource "Client", and the "NUI"
+- [Tauri Desktop Example](examples/tauri-desktop-app): a runnable Tauri 2 app with a TypeScript frontend and Rust backend
 
-The examples are reading material, not runnable applications. Their host APIs,
+The simple, Figma, and FiveM examples are reading material, not runnable applications. Their host APIs,
 HTML, and runtime setup are intentionally not scaffolded. All example code is
 checked with TypeScript; FiveM client, server, and NUI use separate host typings.
+The Tauri example includes its HTML and native runtime setup; see its README for
+prerequisites, launch commands, and Rust tests.
 
 ## Development
 
