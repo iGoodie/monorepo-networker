@@ -9,7 +9,7 @@ export const CLIENT_CHANNEL = CLIENT.channelBuilder()
     const receiveEventName = "__MonorepoNetworker_nuiToClientRpc";
     RegisterNuiCallbackType(receiveEventName);
     on(`__cfx_nui:${receiveEventName}`, (message: NetworkMessage) =>
-      next(message)
+      next(message),
     );
   })
   .startListening();

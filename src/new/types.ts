@@ -6,7 +6,12 @@ export interface MonorepoMessage {
   /** UUIDv4 ID issues for this message */
   messageId: string;
   /** Type of the message, indicating its purpose or response status */
-  type: "emit" | "request" | "success_response" | "error_response";
+  type:
+    | "emit"
+    | "request"
+    | "success_response"
+    | "error_response"
+    | "ack_response";
   /** Name of the logical side, which created this message */
   from: string;
   /** Name of the event */

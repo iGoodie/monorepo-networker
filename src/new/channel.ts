@@ -1,31 +1,35 @@
 import { NetworkError } from "../util/NetworkError";
+import { OmitVoidReturns } from "../util/typeUtils";
 import { uuidV4 } from "../util/uuid_v4";
 import { Networker } from "./networker";
 import { NetworkSide } from "./side";
 import { MonorepoMessage, NetworkEvents } from "./types";
 
 export namespace NetworkChannel {
-  export type Emitter = (msg: MonorepoMessage) => void;
+  export type NetworkListener = (
+    next: (inboundMessage: MonorepoMessage) => void,
+  ) => () => void | void;
 
-  export type OmitVoidReturns<T extends NetworkEvents> = {
-    [K in keyof T as T[K] extends (...args: any[]) => infer R
-      ? R extends void
-        ? never
-        : K
-      : K]: T[K];
-  };
+  /**
+   * - When returns `undefined` -> emitter meant the message is sent without an immediate response, MonorepoNetworker will handle it asynchronously.
+   * - When returns a `Promise<T>` -> emitter meant it will handle the request asynchronously and the promise will resolve with the payload.
+   * - When returns a value `T` -> emitter meant it has handled the request synchronously and returned the payload.
+   */
+  export type Emitter = (message: MonorepoMessage) => any;
 
   export type RequestHandler<
     TEvents extends NetworkEvents,
     TEvent extends keyof TEvents,
   > = (
-    ...args: [...Parameters<TEvents[TEvent]>, msg: MonorepoMessage]
+    ...args: [...Parameters<TEvents[TEvent]>, inboundMessage: MonorepoMessage]
   ) => ReturnType<TEvents[TEvent]>;
 
   export type EventListenerCallback<
     TEvents extends NetworkEvents,
     TEvent extends keyof TEvents,
-  > = (...args: [...Parameters<TEvents[TEvent]>, msg: MonorepoMessage]) => void;
+  > = (
+    ...args: [...Parameters<TEvents[TEvent]>, inboundMessage: MonorepoMessage]
+  ) => undefined;
 
   export type ReceiveListener<
     TEvents extends NetworkEvents,
@@ -33,19 +37,26 @@ export namespace NetworkChannel {
   > = {
     id: string;
     callback: EventListenerCallback<TEvents, TEvent>;
-    opts?: {
-      once?: boolean;
-    };
+    opts?: { once?: boolean };
+  };
+
+  export type ReceiveAnyListener = {
+    id: string;
+    callback: (inboundMessage: MonorepoMessage) => void;
+    opts?: { once?: boolean };
   };
 }
 
 export class NetworkChannel<TEvents extends NetworkEvents> {
+  protected readonly receiveAllListeners: NetworkChannel.ReceiveAnyListener[] =
+    [];
+
   protected readonly receiveListeners = new Map<
     keyof TEvents,
     NetworkChannel.ReceiveListener<TEvents, keyof TEvents>[]
   >();
 
-  protected readonly pendingPromises = new Map<
+  protected readonly requestPromises = new Map<
     keyof TEvents,
     { resolve: Function; reject: Function }
   >();
@@ -55,11 +66,38 @@ export class NetworkChannel<TEvents extends NetworkEvents> {
     NetworkChannel.RequestHandler<TEvents, keyof TEvents>
   >();
 
-  constructor(public readonly hostSide: NetworkSide<any, TEvents>) {}
+  protected cleanupCallbacks: (() => void)[] = [];
+
+  constructor(
+    public readonly hostSide: NetworkSide<any, TEvents>,
+    protected readonly sideEmitters: Map<string, NetworkChannel.Emitter>,
+    protected readonly networkListeners: NetworkChannel.NetworkListener[],
+  ) {
+    this.beginNetworkListeners();
+  }
+
+  protected beginNetworkListeners() {
+    for (const listener of this.networkListeners) {
+      const cleanup = listener((message: MonorepoMessage) => {
+        this.onEmitReceived(message);
+      });
+      if (cleanup != null) {
+        this.cleanupCallbacks.push(cleanup);
+      }
+    }
+  }
 
   protected getEmitter(to: NetworkSide<any, any>) {
-    // TODO:
-    return null as unknown as NetworkChannel.Emitter;
+    const emitter = this.sideEmitters.get(to.name);
+
+    if (emitter == null) {
+      throw new Error(
+        `No emitting strategy is declared from side ${this.hostSide.name} to side: ${to.name}
+        Call SIDE.channelBuilder().emitsTo during the channel setup.`,
+      );
+    }
+
+    return emitter;
   }
 
   public emit<
@@ -98,21 +136,39 @@ export class NetworkChannel<TEvents extends NetworkEvents> {
     const messageId = uuidV4();
 
     return new Promise<ReturnType<TTargetEvents[K]>>((resolve, reject) => {
-      this.pendingPromises.set(messageId, { resolve, reject });
-
-      emit({
+      const result = emit({
         messageId,
         type: "request",
         from: this.hostSide.name,
         eventName: eventName.toString(),
         payload: payload,
       });
+
+      // Emitter returns a Promise, meaning it will explicitly handle the request asynchronously
+      // Generally used for envs where target side is not JS
+      // (E.g Tauri Rust backend <-> JS frontend)
+      if (result instanceof Promise) {
+        result.then(resolve).catch(reject);
+        return;
+      }
+
+      // Emitter returns a value, meaning it has explicitly handled the request synchronously
+      // Generally used for envs where target side is not JS
+      // (E.g Tauri Rust backend <-> JS frontend)
+      if (result !== undefined) {
+        resolve(result);
+        return;
+      }
+
+      // Emitter did not return a value or a Promise, meaning it will handle the request asynchronously via the pendingPromises map
+      this.requestPromises.set(messageId, { resolve, reject });
     });
   }
 
-  public registerRequestHandler<
-    TEvent extends keyof NetworkChannel.OmitVoidReturns<TEvents>,
-  >(event: TEvent, callback: NetworkChannel.RequestHandler<TEvents, TEvent>) {
+  public registerRequestHandler<TEvent extends keyof OmitVoidReturns<TEvents>>(
+    event: TEvent,
+    callback: NetworkChannel.RequestHandler<TEvents, TEvent>,
+  ) {
     if (this.requestHandlers.has(event)) {
       console.warn(
         `Overwriting existing request handler for event: ${event.toString()}`,
@@ -144,6 +200,24 @@ export class NetworkChannel<TEvents extends NetworkEvents> {
     };
   }
 
+  public subscribeAllListener(
+    callback: NetworkChannel.ReceiveAnyListener["callback"],
+    opts?: NetworkChannel.ReceiveAnyListener["opts"],
+  ) {
+    const listenerId = uuidV4();
+
+    this.receiveAllListeners.push({ id: listenerId, callback, opts });
+
+    return () => {
+      const index = this.receiveAllListeners.findIndex(
+        (sub) => sub.id === listenerId,
+      );
+      if (index !== -1) {
+        this.receiveAllListeners.splice(index, 1);
+      }
+    };
+  }
+
   protected onMessageReceived(message: MonorepoMessage) {
     switch (message.type) {
       case "emit":
@@ -154,6 +228,7 @@ export class NetworkChannel<TEvents extends NetworkEvents> {
         break;
       case "success_response":
       case "error_response":
+      case "ack_response":
         this.onResponseReceived(message);
         break;
       default:
@@ -162,19 +237,32 @@ export class NetworkChannel<TEvents extends NetworkEvents> {
   }
 
   protected processEventListeners(message: MonorepoMessage) {
-    const receivers =
+    for (const listener of [...this.receiveAllListeners]) {
+      listener.callback(message);
+
+      if (listener.opts?.once) {
+        const index = this.receiveAllListeners.findIndex(
+          (sub) => sub.id === listener.id,
+        );
+        if (index !== -1) {
+          this.receiveAllListeners.splice(index, 1);
+        }
+      }
+    }
+
+    const eventListeners =
       this.receiveListeners.get(message.eventName as keyof TEvents) ?? [];
 
-    for (const receiver of [...receivers]) {
-      receiver.callback(
+    for (const listener of [...eventListeners]) {
+      listener.callback(
         ...(message.payload as Parameters<TEvents[keyof TEvents]>),
         message,
       );
 
-      if (receiver.opts?.once) {
-        const index = receivers.findIndex((sub) => sub.id === receiver.id);
+      if (listener.opts?.once) {
+        const index = eventListeners.findIndex((sub) => sub.id === listener.id);
         if (index !== -1) {
-          receivers.splice(index, 1);
+          eventListeners.splice(index, 1);
         }
       }
     }
@@ -187,31 +275,60 @@ export class NetworkChannel<TEvents extends NetworkEvents> {
   protected onRequestReceived(message: MonorepoMessage) {
     this.processEventListeners(message);
 
+    const fromSide = Networker.getSideByName(message.from)!;
+
+    const emit = this.getEmitter(fromSide);
+
     const handler = this.requestHandlers.get(message.eventName);
 
-    // TODO: complete
+    // If no handler is found for the request,
+    // send an acknowledgment response back to the requester.
+    if (handler == null) {
+      return emit({
+        messageId: message.messageId,
+        type: "ack_response",
+        eventName: message.eventName,
+        from: this.hostSide.name,
+        payload: [],
+      });
+    }
 
-    if (handler) {
+    try {
       const responsePayload = handler(
         ...(message.payload as Parameters<typeof handler>),
       );
-      // this.sendResponse(message, "success_response", [responsePayload]);
-    } else {
-      // this.sendResponse(message, "error_response", ["No handler found"]);
+
+      return emit({
+        messageId: message.messageId,
+        type: "success_response",
+        eventName: message.eventName,
+        from: this.hostSide.name,
+        payload: [responsePayload],
+      });
+    } catch (err) {
+      return emit({
+        messageId: message.messageId,
+        type: "error_response",
+        eventName: message.eventName,
+        from: this.hostSide.name,
+        payload: [err instanceof Error ? err.message : String(err)],
+      });
     }
   }
 
   protected onResponseReceived(message: MonorepoMessage) {
-    const pending = this.pendingPromises.get(message.messageId);
+    const pending = this.requestPromises.get(message.messageId);
     if (!pending) return;
 
     if (message.type === "success_response") {
       pending.resolve(message.payload[0]);
     } else if (message.type === "error_response") {
       pending.reject(new NetworkError(message));
+    } else if (message.type === "ack_response") {
+      pending.resolve(undefined);
     }
 
-    this.pendingPromises.delete(message.messageId);
+    this.requestPromises.delete(message.messageId);
   }
 
   static Builder = class<TEvents extends NetworkEvents> {
@@ -219,19 +336,44 @@ export class NetworkChannel<TEvents extends NetworkEvents> {
   };
 }
 
-/* -- TEST --- */
+/* -- TEST 1 --- */
 
 const CLIENT = Networker.createSide("Client-side").whichListens<{
   showNotification: (message: string) => void;
   reportMemoryUsage: () => number;
 }>();
 
-const SERVER = Networker.createSide("Server-side").whichListens<{
+const JS_SERVER = Networker.createSide("Server.js-side").whichListens<{
   getServerTime: () => Date;
   registerAccount: (username: string, password: string) => boolean;
 }>();
 
-const CLIENT_CHANNEL = new NetworkChannel(CLIENT);
+const RUST_SERVER = Networker.createSide("Server.rs-side").whichListens<{
+  getServerTime: () => Date;
+  registerAccount: (username: string, password: string) => boolean;
+}>();
+
+/* -- TEST 2 --- */
+
+CLIENT.channelBuilder(); // <-- TODO
+
+const sideEmitters = new Map<string, NetworkChannel.Emitter>();
+
+sideEmitters.set(JS_SERVER.name, (message) => {
+  fetch("http://localhost:3000/", {
+    method: "POST",
+    body: JSON.stringify(message),
+  });
+});
+
+declare const emit: (name: string, args: any[]) => Promise<void>;
+sideEmitters.set(RUST_SERVER.name, async (message) => {
+  return emit(message.eventName, message.payload);
+});
+
+const CLIENT_CHANNEL = new NetworkChannel(CLIENT, sideEmitters, []);
+
+/* -- TEST 3 --- */
 
 const unsub1 = CLIENT_CHANNEL.subscribeListener(
   "showNotification",
@@ -241,14 +383,28 @@ const unsub1 = CLIENT_CHANNEL.subscribeListener(
   },
 );
 const unsub2 = CLIENT_CHANNEL.subscribeListener("reportMemoryUsage", () => {
-  return 999;
+  console.log("Received");
+});
+const unsub3 = CLIENT_CHANNEL.subscribeAllListener((inboundMessage) => {
+  console.log("Received", inboundMessage);
 });
 
 unsub1();
 unsub2();
+unsub3();
 
-CLIENT_CHANNEL.emit(SERVER, "getServerTime");
-CLIENT_CHANNEL.emit(SERVER, "registerAccount", "username", "password");
+CLIENT_CHANNEL.emit(JS_SERVER, "getServerTime");
+CLIENT_CHANNEL.emit(RUST_SERVER, "getServerTime");
+CLIENT_CHANNEL.emit(JS_SERVER, "registerAccount", "username", "password");
+CLIENT_CHANNEL.emit(RUST_SERVER, "registerAccount", "username", "password");
+
+CLIENT_CHANNEL.request(JS_SERVER, "registerAccount", "username", "password")
+  .then(console.log)
+  .catch(console.error);
+
+CLIENT_CHANNEL.request(RUST_SERVER, "registerAccount", "username", "password")
+  .then(console.log)
+  .catch(console.error);
 
 CLIENT_CHANNEL.registerRequestHandler("reportMemoryUsage", () => {
   return 9999;
