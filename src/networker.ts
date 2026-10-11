@@ -29,7 +29,7 @@ export namespace Networker {
     channel: NetworkChannel<T, any>
   ) {
     if (_currentSide != null) {
-      throw new Error("Logical side can be declared only once.");
+      throw new Error("Logical side can be initialized only once.");
     }
     if (channel.side !== side) {
       throw new Error("Given side and channel side doesn't match");

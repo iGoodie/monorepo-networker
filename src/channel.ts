@@ -1,7 +1,7 @@
 import { Networker } from "./networker";
 import { NetworkSide } from "./side";
 import { NetworkEvents, NetworkMessage } from "./types";
-import { NetworkError } from "./util/NetworkError";
+import { NetworkError_OLD } from "./util/NetworkError";
 import { uuidV4 } from "./util/uuid_v4";
 
 const INTERNAL_SUCCESS_RESPONSE_EVENT = "__INTERNAL_SUCCESS_RESPONSE_EVENT";
@@ -21,7 +21,7 @@ type ReceiveStrategy<EM> = (
 
 type ResponseResolver = (value: any) => void;
 
-type ResponseRejecter = (err: NetworkError) => void;
+type ResponseRejecter = (err: NetworkError_OLD) => void;
 
 type MessageHandler<TEvents extends NetworkEvents, E extends keyof TEvents> = (
   ...args: [
@@ -199,7 +199,7 @@ export class NetworkChannel<
     const { reject } = this.pendingRequests.get(message.messageId) ?? {};
     if (reject) {
       this.pendingRequests.delete(message.messageId);
-      reject(new NetworkError(message));
+      reject(new NetworkError_OLD(message));
     }
   }
 

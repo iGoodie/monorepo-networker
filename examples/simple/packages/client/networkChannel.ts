@@ -27,7 +27,7 @@ export const CLIENT_CHANNEL = CLIENT.channelBuilder()
   .receivesFrom(SERVER, (next) => {
     const interval = setInterval(() => {
       if (serverResBuffer.length > 0) {
-        next(serverResBuffer.splice(0, 1).at(0));
+        next(serverResBuffer.shift()!);
       }
     }, 20);
 

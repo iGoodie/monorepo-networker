@@ -28,6 +28,7 @@
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
+      "types": "./dist/index.d.ts",
       "import": "./dist/monorepo-networker.js",
       "require": "./dist/monorepo-networker.umd.cjs"
     }

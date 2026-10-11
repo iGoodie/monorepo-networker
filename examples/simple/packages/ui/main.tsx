@@ -30,7 +30,7 @@ function App() {
   useEffect(() => {
     return UI_CHANNEL.subscribe("focusOnElement", (elementId) => {
       focusHistory.current.push(elementId);
-      document.getElementById(elementId).focus();
+      document.getElementById(elementId)!.focus();
     });
   }, []);
 
