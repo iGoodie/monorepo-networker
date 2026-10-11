@@ -1,15 +1,7 @@
 {
+  "extends": "../../tsconfig.json",
   "compilerOptions": {
-    "baseUrl": "./",
-    "noImplicitAny": true,
-    "module": "ES6",
-    "target": "ES6",
-    "lib": ["DOM", "ES2016"],
-    "moduleResolution": "node",
-    "jsx": "react",
-    "resolveJsonModule": true,
-    "esModuleInterop": true,
-    "noEmit": true
+    "lib": ["DOM", "ES2022"]
   },
   "include": ["./*"]
 }

@@ -1,11 +1,13 @@
 import { CLIENT, NUI } from "@common/networkSides";
+import { NetworkError } from "../../../../src";
+import type { MonorepoMessage } from "../../../../src";
 
 declare function GetParentResourceName(): string;
 
 export const NUI_CHANNEL = NUI.channelBuilder()
-  .emitsTo(CLIENT, (message) => {
-    fetch(
-      `https://${GetParentResourceName}/__MonorepoNetworker_nuiToClientRpc`,
+  .emitsTo(CLIENT, async (message) => {
+    const response = await fetch(
+      `https://${GetParentResourceName()}/__MonorepoNetworker_nuiToClientRpc`,
       {
         method: "POST",
         headers: {
@@ -14,9 +16,14 @@ export const NUI_CHANNEL = NUI.channelBuilder()
         body: JSON.stringify(message),
       }
     );
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    if (message.type === "emit") return undefined;
+    const reply: MonorepoMessage = await response.json();
+    if (reply.type === "error_response") throw new NetworkError(reply);
+    return reply.payload[0];
   })
-  .receivesFrom(CLIENT, (next) => {
-    const listener = (event: MessageEvent) => {
+  .listensTo(CLIENT, (next) => {
+    const listener = (event: MessageEvent<MonorepoMessage>) => {
       next(event.data);
     };
 
@@ -26,6 +33,6 @@ export const NUI_CHANNEL = NUI.channelBuilder()
       window.removeEventListener("message", listener);
     };
   })
-  .startListening();
+  .begin();
 
 // ----------- Message Handlers

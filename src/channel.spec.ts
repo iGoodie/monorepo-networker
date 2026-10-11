@@ -1,8 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { NetworkChannel } from "../src/new/channel";
-import { Networker } from "../src/new/networker";
-import type { MonorepoMessage } from "../src/new/types";
-import { NetworkError } from "../src/util/NetworkError";
+import { NetworkChannel, Networker, NetworkError } from ".";
+import type { MonorepoMessage } from ".";
 
 type RustEmit = (name: string, args: any[]) => Promise<any>;
 
@@ -36,7 +34,7 @@ function createScenario() {
   let receiveJsServer!: (message: MonorepoMessage) => void;
 
   const rustEmit = vi
-    .fn<Parameters<RustEmit>, ReturnType<RustEmit>>()
+    .fn<RustEmit>()
     .mockResolvedValue(undefined);
   vi.stubGlobal("emit", rustEmit);
 

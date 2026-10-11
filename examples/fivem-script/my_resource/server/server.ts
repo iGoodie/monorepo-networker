@@ -1,5 +1,8 @@
+import { Networker } from "../../../../src";
 import { CLIENT, SERVER } from "../common/networkSides";
-import { SERVER_CHANNEL } from "./server.network";
+import { createPlayerChannel, SERVER_CHANNEL } from "./server.network";
+
+Networker.initialize(SERVER);
 
 setTick(() => {
   getPlayers().forEach((playerId) => {
@@ -7,23 +10,17 @@ setTick(() => {
 
     const position = GetEntityCoords(ped);
 
-    SERVER_CHANNEL.emit(
+    createPlayerChannel(playerId).emit(
       CLIENT,
       "updatePlayerLocation",
-      [position[0], position[1]],
-      { clientId: playerId }
+      position[0],
+      position[1],
     );
   });
 });
 
-SERVER_CHANNEL.emit(SERVER, "createWaypoint", [100, 200], {
-  resourceName: "other_resource",
-});
+createPlayerChannel(-1).emit(CLIENT, "updatePlayerLocation", 100, 200);
 
-SERVER_CHANNEL.emit(CLIENT, "updatePlayerLocation", [100, 200], {
-  clientId: -1,
-});
-
-SERVER_CHANNEL.subscribe("createWaypoint", (x, y) => {
+SERVER_CHANNEL.subscribeListener("createWaypoint", (x, y) => {
   console.log("Create waypoint", x, y);
 });
