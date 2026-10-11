@@ -1,395 +1,412 @@
+import { NetworkError } from "./util/NetworkError";
+import { OmitVoidReturns } from "./util/typeUtils";
+import { uuidV4 } from "./util/uuid_v4";
 import { Networker } from "./networker";
 import { NetworkSide } from "./side";
-import { NetworkEvents, NetworkMessage } from "./types";
-import { NetworkError } from "./util/NetworkError";
-import { uuidV4 } from "./util/uuid_v4";
+import { MonorepoMessage, NetworkEvents } from "./types";
 
-const INTERNAL_SUCCESS_RESPONSE_EVENT = "__INTERNAL_SUCCESS_RESPONSE_EVENT";
-const INTERNAL_ERROR_RESPONSE_EVENT = "__INTERNAL_ERROR_RESPONSE_EVENT";
+export namespace NetworkChannel {
+  export type NetworkListener = (
+    next: (inboundMessage: MonorepoMessage) => void,
+  ) => (() => void) | void;
 
-type EmitStrategy<EM extends object> = (
-  message: NetworkMessage,
-  metadata: EM
-) => void;
-
-type ReceiveStrategy<EM> = (
-  next: (
-    message: NetworkMessage,
-    ...[metadata]: [EM] extends [never] ? [] : [EM]
-  ) => void
-) => (() => void) | void;
-
-type ResponseResolver = (value: any) => void;
-
-type ResponseRejecter = (err: NetworkError) => void;
-
-type MessageHandler<TEvents extends NetworkEvents, E extends keyof TEvents> = (
-  ...args: [
-    ...Parameters<TEvents[E]>,
-    ...[from: NetworkSide<any, any>, rawMessage: NetworkMessage]
-  ]
-) => ReturnType<TEvents[E]> | Promise<ReturnType<TEvents[E]>>;
-
-type SubscriptionListener<
-  TEvents extends NetworkEvents,
-  E extends keyof TEvents
-> = (
-  ...args: [
-    ...Parameters<TEvents[E]>,
-    ...[from: NetworkSide<any, any>, rawMessage: NetworkMessage]
-  ]
-) => undefined;
-
-/**
- * Finalizes the Channel, and starts listening with given procedure.
- *
- * @param next Callback function that is supposed to be invoked with the message when an event is received.
- * @returns An optional cleanup function, that declares how this side detaches the attached listener(s).
- */
-export type BeginListening = (
-  next: (message: NetworkMessage, metadata?: any) => void
-) => (() => void) | void;
-
-export class NetworkChannelBuilder<
-  TEvents extends NetworkEvents,
-  TEmissionMeta extends { [SideName: string]: EmitStrategy<any> }
-> {
-  protected emitStrategies: Map<string, EmitStrategy<any>> = new Map();
-  protected receiveStrategies: Map<string, ReceiveStrategy<any>> = new Map();
-
-  constructor(protected readonly side: NetworkSide<any, TEvents>) {}
+  export type NetworkListenerRegistration = {
+    targetSide?: NetworkSide<any, any>;
+    listener: NetworkListener;
+  };
 
   /**
-   * Register strategy for how this side receives messages from given other side.
-   *
-   *
-   * @param side The network side from which messages will be received.
-   * @param strategy The strategy for handling incoming messages from the specified side.
-   * @returns This channel, so you can chain more things as needed
+   * - When returns `undefined` -> emitter meant the message is sent without an immediate response, MonorepoNetworker will handle it asynchronously.
+   * - When returns a `Promise<T>` -> emitter meant it will handle the request asynchronously and the promise will resolve with the payload.
+   * - When returns a value `T` -> emitter meant it has handled the request synchronously and returned the payload.
    */
-  public receivesFrom<N extends string>(
-    side: NetworkSide<N, any>,
-    strategy: ReceiveStrategy<
-      N extends keyof TEmissionMeta ? TEmissionMeta[N] : never
-    >
-  ) {
-    this.receiveStrategies.set(side.name, strategy);
-    return this;
-  }
+  export type Emitter = (message: MonorepoMessage) => any;
 
-  /**
-   * Register strategy on how this side emits message to given other side.
-   *
-   * @param to The target network side to which messages will be emitted.
-   * @param strategy Strategy for emitting a message.
-   * @returns This channel, so you can chain more things as needed
-   */
-  public emitsTo<N extends string, EM extends object = never>(
-    side: NetworkSide<N, any>,
-    strategy: EmitStrategy<EM>
-  ) {
-    this.emitStrategies.set(side.name, strategy);
-    return this as unknown as NetworkChannelBuilder<
-      TEvents,
-      [EM] extends [never]
-        ? TEmissionMeta
-        : TEmissionMeta & {
-            [K in N]: EM;
-          }
-    >;
-  }
+  export type RequestHandler<
+    TEvents extends NetworkEvents,
+    TEvent extends keyof TEvents,
+  > = (
+    ...args: [
+      ...eventArgs: Parameters<TEvents[TEvent]>,
+      inboundMessage: MonorepoMessage,
+    ]
+  ) => ReturnType<TEvents[TEvent]> | Promise<ReturnType<TEvents[TEvent]>>;
 
-  /**
-   * Finalizes and builds the Channel.
-   * And starts listening with registered receiving strategies.
-   *
-   * @returns The channel
-   */
-  public startListening() {
-    return new NetworkChannel<TEvents, TEmissionMeta>(
-      this.side,
-      this.emitStrategies,
-      this.receiveStrategies
-    );
-  }
+  export type EventListenerCallback<
+    TEvents extends NetworkEvents,
+    TEvent extends keyof TEvents,
+  > = (
+    ...args: [
+      ...eventArgs: Parameters<TEvents[TEvent]>,
+      inboundMessage: MonorepoMessage,
+    ]
+  ) => undefined;
+
+  export type ReceiveListener<
+    TEvents extends NetworkEvents,
+    TEvent extends keyof TEvents,
+  > = {
+    id: string;
+    callback: EventListenerCallback<TEvents, TEvent>;
+    opts?: { once?: boolean };
+  };
+
+  export type ReceiveAnyListener = {
+    id: string;
+    callback: (inboundMessage: MonorepoMessage) => void;
+    opts?: { once?: boolean };
+  };
 }
 
-export class NetworkChannel<
-  TEvents extends NetworkEvents,
-  TEmissionMeta extends { [SideName: string]: EmitStrategy<any> }
-> {
-  protected messageHandlers: {
-    [K in keyof TEvents]?: MessageHandler<TEvents, K>;
-  } = {};
-  protected subscriptionListeners: {
-    [K in keyof TEvents]?: Record<string, SubscriptionListener<TEvents, K>>;
-  } = {};
-  protected pendingRequests: Map<
-    string,
-    { resolve: ResponseResolver; reject: ResponseRejecter }
-  > = new Map();
+export class NetworkChannel<TEvents extends NetworkEvents> {
+  protected readonly receiveAllListeners: NetworkChannel.ReceiveAnyListener[] =
+    [];
+
+  protected readonly receiveListeners = new Map<
+    keyof TEvents,
+    NetworkChannel.ReceiveListener<TEvents, keyof TEvents>[]
+  >();
+
+  protected readonly requestPromises = new Map<
+    keyof TEvents,
+    { resolve: Function; reject: Function }
+  >();
+
+  protected readonly requestHandlers = new Map<
+    keyof TEvents,
+    NetworkChannel.RequestHandler<TEvents, keyof TEvents>
+  >();
+
   protected cleanupCallbacks: (() => void)[] = [];
 
   constructor(
-    public readonly side: NetworkSide<any, TEvents>,
-    protected emitStrategies: Map<string, EmitStrategy<any>> = new Map(),
-    protected receiveStrategies: Map<string, ReceiveStrategy<any>> = new Map()
+    public readonly hostSide: NetworkSide<any, TEvents>,
+    protected readonly sideEmitters: Map<string, NetworkChannel.Emitter>,
+    protected readonly networkListeners: NetworkChannel.NetworkListenerRegistration[],
   ) {
-    receiveStrategies.forEach((strategy) => {
-      const next = (message: NetworkMessage, metadata?: any) =>
-        this.receiveNetworkMessage(message, metadata);
-      const cleanup = strategy(next);
-      if (cleanup) this.cleanupCallbacks.push(cleanup);
-    });
+    this.beginNetworkListeners();
   }
 
-  /**
-   * Register a handler for an incoming message.
-   * The handler is responsible of listening to incoming events, and possibly responding/returning a value to them.
-   * @param eventName Name of the event to be listened
-   * @param handler Handler that accepts incoming message and sender, then consumes them.
-   */
-  public registerMessageHandler<E extends keyof TEvents>(
-    eventName: E,
-    handler: MessageHandler<TEvents, E>
-  ) {
-    this.messageHandlers[eventName] = handler;
+  protected beginNetworkListeners() {
+    for (const { targetSide, listener } of this.networkListeners) {
+      const cleanup = listener((message: MonorepoMessage) => {
+        if (targetSide == null || message.from === targetSide.name) {
+          this.onMessageReceived(message);
+        } else {
+          console.warn(
+            `Received message from unexpected side: ${message.from}. Expected: ${targetSide.name}`,
+          );
+        }
+      });
+      if (cleanup != null) {
+        this.cleanupCallbacks.push(cleanup);
+      }
+    }
   }
 
-  protected getEmitStrategy(side: NetworkSide<any, any>) {
-    const strategy = this.emitStrategies.get(side.name);
+  protected getEmitter(to: NetworkSide<any, any>) {
+    const emitter = this.sideEmitters.get(to.name);
 
-    if (!strategy) {
-      const currentSide = Networker.getCurrentSide();
+    if (emitter == null) {
       throw new Error(
-        `No emit strategy is registered from ${currentSide.name} to ${side.name}`
+        `No emitting strategy is declared from side ${this.hostSide.name} to side: ${to.name}
+        Call SIDE.channelBuilder().emitsTo during the channel setup.`,
       );
     }
 
-    return strategy;
+    return emitter;
   }
 
-  protected async receiveNetworkMessage(
-    message: NetworkMessage,
-    metadata: any
-  ) {
-    if (message.eventName === INTERNAL_SUCCESS_RESPONSE_EVENT) {
-      this.receiveSuccessResponse(message);
-      return;
-    }
-
-    if (message.eventName === INTERNAL_ERROR_RESPONSE_EVENT) {
-      this.receiveErrorResponse(message);
-      return;
-    }
-
-    this.invokeSubscribers(message);
-    this.handleIncomingMessage(message, metadata);
-  }
-
-  protected async receiveSuccessResponse(message: NetworkMessage) {
-    const { resolve } = this.pendingRequests.get(message.messageId) ?? {};
-    if (resolve) {
-      this.pendingRequests.delete(message.messageId);
-      resolve(message.payload[0]);
-    }
-  }
-
-  protected async receiveErrorResponse(message: NetworkMessage) {
-    const { reject } = this.pendingRequests.get(message.messageId) ?? {};
-    if (reject) {
-      this.pendingRequests.delete(message.messageId);
-      reject(new NetworkError(message));
-    }
-  }
-
-  protected async invokeSubscribers(message: NetworkMessage) {
-    Object.values(this.subscriptionListeners[message.eventName] ?? {}).forEach(
-      (listener) => {
-        listener(
-          ...(message.payload as never),
-          Networker.getSide(message.fromSide),
-          message
-        );
-      }
-    );
-  }
-
-  protected async handleIncomingMessage(
-    message: NetworkMessage,
-    metadata: any
-  ) {
-    const handler = this.messageHandlers[message.eventName];
-
-    if (handler != null) {
-      const side = Networker.getSide(message.fromSide);
-      if (!side) {
-        throw new Error(
-          `Message received from an unknown side: ${message.fromSide}`
-        );
-      }
-
-      const emit = this.getEmitStrategy(side);
-
-      try {
-        const result = await handler(
-          ...(message.payload as never),
-          Networker.getSide(message.fromSide),
-          message
-        );
-
-        if (emit != null) {
-          emit(
-            {
-              messageId: message.messageId,
-              fromSide: message.fromSide,
-              eventName: INTERNAL_SUCCESS_RESPONSE_EVENT,
-              payload: [result],
-            },
-            metadata
-          );
-        }
-      } catch (err) {
-        if (emit != null) {
-          emit(
-            {
-              messageId: message.messageId,
-              fromSide: message.fromSide,
-              eventName: INTERNAL_ERROR_RESPONSE_EVENT,
-              payload: [
-                err instanceof Error ? err.message : "Failed to handle",
-              ],
-            },
-            metadata
-          );
-        }
-      }
-    }
-  }
-
-  /**
-   * Emits an event to a target side of the network with the specified event name and arguments.
-   *
-   * @param targetSide - The side of the network to which the event will be emitted.
-   * @param eventName - The name of the event to emit.
-   * @param emitArgs - The arguments for the event handler corresponding to the `eventName`.
-   * @param emitMetadata - The metadata for the event emitter to use.
-   *
-   * @example
-   *  // ./common/sides.ts
-   *  const OTHER_SIDE = Networker.createSide("Other-side").listens<
-   *    hello(arg1: string): void;
-   *  >();
-   *
-   *  MY_CHANNEL.emit(OTHER_SIDE, "hello", ["world"]);
-   */
-  public emit<N extends string, T extends NetworkEvents, E extends keyof T>(
-    targetSide: NetworkSide<N, T>,
-    eventName: E,
-    emitArgs: Parameters<T[E]>,
-    ...[emitMetadata]: N extends keyof TEmissionMeta ? [TEmissionMeta[N]] : []
-  ) {
-    const emit = this.getEmitStrategy(targetSide);
-
-    emit(
-      {
-        messageId: uuidV4(),
-        fromSide: Networker.getCurrentSide().name,
-        eventName: eventName.toString(),
-        payload: emitArgs,
-      },
-      emitMetadata
-    );
-  }
-
-  /**
-   * Sends a request to a target side of the network with the specified event name and arguments.
-   * Returns a promise that resolves with the response from the target side.
-   *
-   * @param targetSide - The side of the network to which the request will be sent.
-   * @param eventName - The name of the event to request.
-   * @param eventArgs - The arguments for the event handler corresponding to the `eventName`.
-   * @param emitMetadata - The metadata for the event emitter to use.
-   *
-   * @returns A promise that resolves with the return value of the event handler on the target side.
-   *
-   * @example
-   *  // ./common/sides.ts
-   *  const OTHER_SIDE = Networker.createSide("Other-side").listens<
-   *    hello(arg1: string): void;
-   *    updateItem(itemId: string, name: string): boolean;
-   *  >();
-   *
-   *  MY_CHANNEL.request(OTHER_SIDE, "hello", ["world"]).then(() => {
-   *    console.log("Other side received my request");
-   *  });
-   *  MY_CHANNEL.request(OTHER_SIDE, "updateItem", ["item-1", "My Item"]).then((success) => {
-   *    console.log("Update success:", success);
-   *  });
-   */
-  public async request<
-    N extends string,
-    T extends NetworkEvents,
-    E extends keyof T
+  public emit<
+    TTargetName extends string,
+    TTargetEvents extends NetworkEvents,
+    K extends keyof TTargetEvents,
   >(
-    targetSide: NetworkSide<any, T>,
-    eventName: E,
-    eventArgs: Parameters<T[E]>,
-    ...[emitMetadata]: N extends keyof TEmissionMeta ? [TEmissionMeta[N]] : []
+    targetSide: NetworkSide<TTargetName, TTargetEvents>,
+    eventName: K,
+    ...payload: Parameters<TTargetEvents[K]>
   ) {
-    const emit = this.getEmitStrategy(targetSide);
+    const emit = this.getEmitter(targetSide);
 
     const messageId = uuidV4();
 
-    return new Promise<ReturnType<T[E]>>((resolve, reject) => {
-      this.pendingRequests.set(messageId, { resolve, reject });
-
-      emit(
-        {
-          messageId,
-          fromSide: Networker.getCurrentSide().name,
-          eventName: eventName.toString(),
-          payload: eventArgs,
-        },
-        emitMetadata
-      );
+    emit({
+      messageId,
+      type: "emit",
+      from: this.hostSide.name,
+      eventName: eventName.toString(),
+      payload: payload,
     });
   }
 
-  /**
-   * Subscribes to an event with the specified event name and listener.
-   * Returns an unsubscribe function to remove the listener.
-   *
-   * @param eventName - The name of the event to subscribe to.
-   * @param eventListener - The listener function to handle the event when it is triggered.
-   *
-   * @returns A function to unsubscribe the listener from the event.
-   *
-   * @example
-   *  // ./common/sides.ts
-   *  const MY_SIDE = Networker.createSide("Other-side").listens<
-   *    print(text: string): void;
-   *  >();
-   *
-   * // ./my-side/network.ts
-   *  const MY_CHANNEL = MY_SIDE.channelBuilder().beginListening();
-   *
-   *  const unsubscribe = MY_CHANNEL.subscribe("print", text => {
-   *    console.log(text);
-   *  });
-   *  setTimeout(() => unsubscribe(), 5000);
-   */
-  public subscribe<E extends keyof TEvents>(
-    eventName: E,
-    eventListener: SubscriptionListener<TEvents, E>
+  public async request<
+    TTargetName extends string,
+    TTargetEvents extends NetworkEvents,
+    K extends keyof TTargetEvents,
+  >(
+    targetSide: NetworkSide<TTargetName, TTargetEvents>,
+    eventName: K,
+    ...payload: Parameters<TTargetEvents[K]>
   ) {
-    const subId = uuidV4();
+    const emit = this.getEmitter(targetSide);
 
-    const listeners = (this.subscriptionListeners[eventName] ??= {});
-    listeners[subId] = eventListener;
+    const messageId = uuidV4();
+
+    return new Promise<ReturnType<TTargetEvents[K]>>((resolve, reject) => {
+      const result = emit({
+        messageId,
+        type: "request",
+        from: this.hostSide.name,
+        eventName: eventName.toString(),
+        payload: payload,
+      });
+
+      // Emitter returns a Promise, meaning it will explicitly handle the request asynchronously
+      // Generally used for envs where target side is not JS
+      // (E.g Tauri Rust backend <-> JS frontend)
+      if (result instanceof Promise) {
+        result.then(resolve).catch(reject);
+        return;
+      }
+
+      // Emitter returns a value, meaning it has explicitly handled the request synchronously
+      // Generally used for envs where target side is not JS
+      // (E.g Tauri Rust backend <-> JS frontend)
+      if (result !== undefined) {
+        resolve(result);
+        return;
+      }
+
+      // Emitter did not return a value or a Promise, meaning it will handle the request asynchronously via the pendingPromises map
+      this.requestPromises.set(messageId, { resolve, reject });
+    });
+  }
+
+  public registerRequestHandler<TEvent extends keyof OmitVoidReturns<TEvents>>(
+    event: TEvent,
+    callback: NetworkChannel.RequestHandler<TEvents, TEvent>,
+  ) {
+    if (this.requestHandlers.has(event)) {
+      console.warn(
+        `Overwriting existing request handler for event: ${event.toString()}`,
+      );
+    }
+    this.requestHandlers.set(event, callback);
+  }
+
+  public subscribeListener<TEvent extends keyof TEvents>(
+    event: TEvent,
+    callback: NetworkChannel.ReceiveListener<TEvents, TEvent>["callback"],
+    opts?: NetworkChannel.ReceiveListener<TEvents, TEvent>["opts"],
+  ) {
+    const receiverId = uuidV4();
+
+    if (!this.receiveListeners.has(event)) {
+      this.receiveListeners.set(event, []);
+    }
+
+    const eventSubscribers = this.receiveListeners.get(event)!;
+
+    eventSubscribers.push({ id: receiverId, callback, opts });
 
     return () => {
-      delete this.subscriptionListeners[eventName]![subId];
+      const index = eventSubscribers.findIndex((sub) => sub.id === receiverId);
+      if (index !== -1) {
+        eventSubscribers.splice(index, 1);
+      }
     };
+  }
+
+  public subscribeAllListener(
+    callback: NetworkChannel.ReceiveAnyListener["callback"],
+    opts?: NetworkChannel.ReceiveAnyListener["opts"],
+  ) {
+    const listenerId = uuidV4();
+
+    this.receiveAllListeners.push({ id: listenerId, callback, opts });
+
+    return () => {
+      const index = this.receiveAllListeners.findIndex(
+        (sub) => sub.id === listenerId,
+      );
+      if (index !== -1) {
+        this.receiveAllListeners.splice(index, 1);
+      }
+    };
+  }
+
+  protected onMessageReceived(message: MonorepoMessage) {
+    switch (message.type) {
+      case "emit":
+        this.onEmitReceived(message);
+        break;
+      case "request":
+        this.onRequestReceived(message);
+        break;
+      case "success_response":
+      case "error_response":
+      case "ack_response":
+        this.onResponseReceived(message);
+        break;
+      default:
+        console.warn("Unknown message type received:", message.type);
+    }
+  }
+
+  protected processEventListeners(message: MonorepoMessage) {
+    for (const listener of [...this.receiveAllListeners]) {
+      listener.callback(message);
+
+      if (listener.opts?.once) {
+        const index = this.receiveAllListeners.findIndex(
+          (sub) => sub.id === listener.id,
+        );
+        if (index !== -1) {
+          this.receiveAllListeners.splice(index, 1);
+        }
+      }
+    }
+
+    const eventListeners =
+      this.receiveListeners.get(message.eventName as keyof TEvents) ?? [];
+
+    for (const listener of [...eventListeners]) {
+      listener.callback(
+        ...(message.payload as Parameters<TEvents[keyof TEvents]>),
+        message,
+      );
+
+      if (listener.opts?.once) {
+        const index = eventListeners.findIndex((sub) => sub.id === listener.id);
+        if (index !== -1) {
+          eventListeners.splice(index, 1);
+        }
+      }
+    }
+  }
+
+  protected onEmitReceived(message: MonorepoMessage) {
+    this.processEventListeners(message);
+  }
+
+  protected onRequestReceived(message: MonorepoMessage) {
+    const fromSide = Networker.getSideByName(message.from);
+
+    if (fromSide == null) {
+      console.warn(`Received request from unknown side: ${message.from}`);
+      return;
+    }
+
+    this.processEventListeners(message);
+
+    const emit = this.getEmitter(fromSide);
+
+    const handler = this.requestHandlers.get(message.eventName);
+
+    // If no handler is found for the request,
+    // send an acknowledgment response back to the requester.
+    if (handler == null) {
+      return emit({
+        messageId: message.messageId,
+        type: "ack_response",
+        eventName: message.eventName,
+        from: this.hostSide.name,
+        payload: [],
+      });
+    }
+
+    const emitSuccess = (resolved: unknown) =>
+      emit({
+        messageId: message.messageId,
+        type: "success_response",
+        eventName: message.eventName,
+        from: this.hostSide.name,
+        payload: [resolved],
+      });
+
+    const emitError = (err: unknown) =>
+      emit({
+        messageId: message.messageId,
+        type: "error_response",
+        eventName: message.eventName,
+        from: this.hostSide.name,
+        payload: [err instanceof Error ? err.message : String(err)],
+      });
+
+    try {
+      const handlerArgs = [...message.payload, message] as Parameters<
+        typeof handler
+      >;
+
+      const responsePayload = handler(...handlerArgs);
+
+      if (responsePayload instanceof Promise) {
+        return responsePayload.then(
+          (resolved) => emitSuccess(resolved),
+          (err) => emitError(err),
+        );
+      }
+
+      return emitSuccess(responsePayload);
+    } catch (err) {
+      return emitError(err);
+    }
+  }
+
+  protected onResponseReceived(message: MonorepoMessage) {
+    const pending = this.requestPromises.get(message.messageId);
+    if (!pending) return;
+
+    if (message.type === "success_response") {
+      pending.resolve(message.payload[0]);
+    } else if (message.type === "error_response") {
+      pending.reject(new NetworkError(message));
+    } else if (message.type === "ack_response") {
+      pending.resolve(undefined);
+    }
+
+    this.requestPromises.delete(message.messageId);
+  }
+
+  public close() {
+    for (const cleanup of this.cleanupCallbacks) {
+      cleanup();
+    }
+    this.cleanupCallbacks = [];
+  }
+}
+
+export class NetworkChannelBuilder<TEvents extends NetworkEvents> {
+  protected readonly sideEmitters = new Map<string, NetworkChannel.Emitter>();
+  protected readonly networkListeners: NetworkChannel.NetworkListenerRegistration[] =
+    [];
+
+  constructor(public readonly hostSide: NetworkSide<any, TEvents>) {}
+
+  public emitsTo(
+    targetSide: NetworkSide<any, any>,
+    emitter: NetworkChannel.Emitter,
+  ) {
+    this.sideEmitters.set(targetSide.name, emitter);
+    return this;
+  }
+
+  public listensTo(
+    targetSide: NetworkSide<any, any>,
+    listener: NetworkChannel.NetworkListener,
+  ) {
+    this.networkListeners.push({ targetSide, listener });
+    return this;
+  }
+
+  public listens(listener: NetworkChannel.NetworkListener) {
+    this.networkListeners.push({ listener });
+    return this;
+  }
+
+  public begin(): NetworkChannel<TEvents> {
+    return new NetworkChannel(this.hostSide, new Map(this.sideEmitters), [
+      ...this.networkListeners,
+    ]);
   }
 }

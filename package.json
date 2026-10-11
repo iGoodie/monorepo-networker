@@ -10,10 +10,10 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/CoconutGoodie/monorepo-networker.git"
+    "url": "https://github.com/iGoodie/monorepo-networker.git"
   },
   "bugs": {
-    "url": "https://github.com/CoconutGoodie/monorepo-networker/issues"
+    "url": "https://github.com/iGoodie/monorepo-networker/issues"
   },
   "keywords": [
     "ipc",
@@ -23,11 +23,15 @@
     "listener"
   ],
   "type": "module",
+  "engines": {
+    "node": "^22.12.0 || >=24.0.0"
+  },
   "main": "./dist/monorepo-networker.umd.cjs",
   "module": "./dist/monorepo-networker.js",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
+      "types": "./dist/index.d.ts",
       "import": "./dist/monorepo-networker.js",
       "require": "./dist/monorepo-networker.umd.cjs"
     }
@@ -37,15 +41,19 @@
   ],
   "scripts": {
     "dev": "vite",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.checks.json",
+    "typecheck:examples": "pnpm --filter \"./examples/*\" --recursive typecheck",
+    "check": "pnpm typecheck && pnpm typecheck:examples && pnpm test && pnpm build",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "prepack": "pnpm run build"
   },
   "devDependencies": {
-    "@figma/plugin-typings": "^1.62.0",
-    "@types/node": "^18.15.11",
-    "typescript": "^4.9.3",
-    "vite": "^4.2.0",
-    "vite-plugin-dts": "^2.1.0"
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.3",
+    "vite": "^8.3.4",
+    "vite-plugin-dts": "^5.1.2",
+    "vitest": "^5.0.3"
   }
 }

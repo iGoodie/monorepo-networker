@@ -1,6 +1,5 @@
-import { NetworkChannel } from "./channel";
-import { NetworkSide } from "./side";
 import { NetworkEvents } from "./types";
+import { NetworkSide } from "./side";
 
 export namespace Networker {
   const _sides: NetworkSide<any, any>[] = [];
@@ -22,17 +21,12 @@ export namespace Networker {
    *
    * **NOTE:** This MUST be called, before any emit/request can be called from the channel
    * @param side Side object created by `Networker.createSide`
-   * @param channel Side specific Channel, created by `SIDE.channelBuilder()`
    */
   export function initialize<N extends string, T extends NetworkEvents>(
     side: NetworkSide<N, T>,
-    channel: NetworkChannel<T, any>
   ) {
     if (_currentSide != null) {
-      throw new Error("Logical side can be declared only once.");
-    }
-    if (channel.side !== side) {
-      throw new Error("Given side and channel side doesn't match");
+      throw new Error("Logical side can be initialized only once.");
     }
     _currentSide = side;
   }
@@ -44,7 +38,7 @@ export namespace Networker {
    */
   export function createSide<N extends string>(name: N) {
     return {
-      listens: <TEvents extends NetworkEvents>() => {
+      whichListens: <TEvents extends NetworkEvents>() => {
         const side = new NetworkSide<N, TEvents>(name);
         _sides.push(side);
         return side;
@@ -57,7 +51,7 @@ export namespace Networker {
    * @param name Name of the logical side
    * @returns Side with given name
    */
-  export function getSide(name: string) {
+  export function getSideByName(name: string) {
     for (let side of _sides) {
       if (side.name === name) return side;
     }

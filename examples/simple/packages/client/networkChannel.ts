@@ -1,21 +1,16 @@
-import { NetworkMessage } from "../../../../src";
+import type { MonorepoMessage } from "../../../../src";
 import { CLIENT, SERVER, UI } from "../../common/networkSides";
-
-const serverResBuffer: NetworkMessage[] = [];
+import { createHttpEmitter } from "../../common/httpEmitter";
 
 export const CLIENT_CHANNEL = CLIENT.channelBuilder()
   .emitsTo(UI, (message) => {
-    parent.postMessage({ pluginMessage: message }, "*");
+    parent.postMessage(message, "*");
   })
-  .emitsTo(SERVER, (message) => {
-    fetch("server://", { method: "POST", body: JSON.stringify(message) })
-      .then((response) => response.json())
-      .then((json) => serverResBuffer.push(json as NetworkMessage));
-  })
-  .receivesFrom(UI, (next) => {
-    const listener = (event: MessageEvent) => {
-      if (event.data?.pluginId == null) return;
-      next(event.data.pluginMessage);
+  .emitsTo(SERVER, createHttpEmitter("http://localhost:3000"))
+  .listensTo(UI, (next) => {
+    const listener = (event: MessageEvent<MonorepoMessage>) => {
+      if (event.source !== parent) return;
+      next(event.data);
     };
 
     window.addEventListener("message", listener);
@@ -24,27 +19,16 @@ export const CLIENT_CHANNEL = CLIENT.channelBuilder()
       window.removeEventListener("message", listener);
     };
   })
-  .receivesFrom(SERVER, (next) => {
-    const interval = setInterval(() => {
-      if (serverResBuffer.length > 0) {
-        next(serverResBuffer.splice(0, 1).at(0));
-      }
-    }, 20);
-
-    return () => {
-      clearInterval(interval);
-    };
-  })
-  .startListening();
+  .begin();
 
 // ----------- Message Handlers
 
-CLIENT_CHANNEL.registerMessageHandler("execute", (script, from) => {
+CLIENT_CHANNEL.subscribeListener("execute", (script) => {
   eval(script);
 });
-CLIENT_CHANNEL.registerMessageHandler("getClientTime", () => {
+CLIENT_CHANNEL.registerRequestHandler("getClientTime", () => {
   return Date.now();
 });
-CLIENT_CHANNEL.registerMessageHandler("receiveUser", (user) => {
+CLIENT_CHANNEL.subscribeListener("receiveUser", (user) => {
   console.log("A user is received:", user);
 });

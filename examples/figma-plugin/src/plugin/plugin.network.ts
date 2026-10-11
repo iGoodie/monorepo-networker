@@ -4,16 +4,16 @@ export const PLUGIN_CHANNEL = PLUGIN.channelBuilder()
   .emitsTo(UI, (message) => {
     figma.ui.postMessage(message);
   })
-  .receivesFrom(UI, (next) => {
+  .listensTo(UI, (next) => {
     const listener: MessageEventHandler = (event) => next(event);
     figma.ui.on("message", listener);
     return () => figma.ui.off("message", listener);
   })
-  .startListening();
+  .begin();
 
 // ---------- Message handlers
 
-PLUGIN_CHANNEL.registerMessageHandler("createRectangle", (width, height) => {
+PLUGIN_CHANNEL.registerRequestHandler("createRectangle", (width, height) => {
   if (figma.editorType !== "figma") throw new Error("Invalid editor type");
 
   const rect = figma.createRectangle();
@@ -33,6 +33,5 @@ PLUGIN_CHANNEL.registerMessageHandler("createRectangle", (width, height) => {
   rect.resize(width, height);
   figma.currentPage.appendChild(rect);
   figma.viewport.scrollAndZoomIntoView([rect]);
-  figma.closePlugin();
   return rect.id;
 });

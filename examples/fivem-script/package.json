@@ -1,17 +1,14 @@
 {
   "name": "example-fivem-script",
   "version": "1.0.0",
-  "description": "",
+  "private": true,
+  "description": "Compile-only example of FiveM client, server, and NUI transports",
   "author": "iGoodie",
   "scripts": {
-    "build": "node build.js --mode=production",
-    "watch": "node build.js"
+    "typecheck": "tsc --noEmit -p my_resource/client && tsc --noEmit -p my_resource/server && tsc --noEmit -p my_resource/nui"
   },
   "devDependencies": {
     "@citizenfx/client": "2.0.12168-1",
-    "@citizenfx/server": "2.0.12168-1",
-    "@types/node": "^22.10.2",
-    "@types/react": "^19.0.2",
-    "@types/react-dom": "^19.0.2"
+    "@citizenfx/server": "2.0.12168-1"
   }
 }

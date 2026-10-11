@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="/src/styles.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Networker Desktop</title>
+    <script type="module" src="/src/main.ts" defer></script>
+  </head>
+
+  <body>
+    <main class="container">
+      <header>
+        <img src="/src/assets/tauri.svg" width="40" height="40" alt="Tauri" />
+        <h1>Networker Desktop</h1>
+        <p id="status" role="status">Connecting...</p>
+      </header>
+      <form id="greet-form">
+        <label for="greet-input">Name</label>
+        <div class="row">
+          <input id="greet-input" name="name" placeholder="Ada" autocomplete="given-name" required />
+          <button id="greet-button" type="submit" disabled>Greet</button>
+        </div>
+      </form>
+      <section aria-labelledby="response-title">
+        <h2 id="response-title">Response</h2>
+        <p id="greet-msg" aria-live="polite">No response yet.</p>
+      </section>
+      <section aria-labelledby="notification-title">
+        <div class="row">
+          <h2 id="notification-title">Notifications</h2>
+          <button id="notify-button" type="button" disabled>Send notification</button>
+        </div>
+        <p id="notification" aria-live="polite">No notifications yet.</p>
+      </section>
+      <p id="error" role="alert"></p>
+    </main>
+  </body>
+</html>

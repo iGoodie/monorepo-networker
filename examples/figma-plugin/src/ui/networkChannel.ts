@@ -1,11 +1,12 @@
 import { PLUGIN, UI } from "@common/networkSides";
+import type { MonorepoMessage } from "../../../../src";
 
 export const UI_CHANNEL = UI.channelBuilder()
   .emitsTo(PLUGIN, (message) => {
     parent.postMessage({ pluginMessage: message }, "*");
   })
-  .receivesFrom(PLUGIN, (next) => {
-    const listener = (event: MessageEvent) => {
+  .listensTo(PLUGIN, (next) => {
+    const listener = (event: MessageEvent<{ pluginId?: string; pluginMessage: MonorepoMessage }>) => {
       if (event.data?.pluginId == null) return;
       next(event.data.pluginMessage);
     };
@@ -13,10 +14,10 @@ export const UI_CHANNEL = UI.channelBuilder()
     window.addEventListener("message", listener);
     return () => window.removeEventListener("message", listener);
   })
-  .startListening();
+  .begin();
 
 // ---------- Message handlers
 
-UI_CHANNEL.registerMessageHandler("hello", (text, side) => {
-  console.log(`${side.name} said "${text}"`);
+UI_CHANNEL.subscribeListener("hello", (text, message) => {
+  console.log(`${message.from} said "${text}"`);
 });

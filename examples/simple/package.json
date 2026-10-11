@@ -1,8 +1,12 @@
 {
   "name": "example-simple",
   "version": "1.0.0",
+  "private": true,
   "description": "Simple example 3 mockup sides: midware \"Client\", HTTP \"Server\" and React \"UI\"",
   "author": "iGoodie",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
   "devDependencies": {
     "@types/react": "^19.0.2",
     "@types/react-dom": "^19.0.2",

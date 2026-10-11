@@ -1,35 +1,39 @@
 import { CLIENT, SERVER, UI } from "../../common/networkSides";
-
-import http, { IncomingMessage, ServerResponse } from "node:http";
-import { NetworkMessage } from "../../../../src";
+import http, { ServerResponse } from "node:http";
+import type { MonorepoMessage } from "../../../../src";
 import { getHttpBody } from "./util/httpUtils";
 
-let contexts: Map<
-  string,
-  {
-    req: IncomingMessage;
-    res: ServerResponse;
-  }
-> = new Map();
+const responses = new Map<string, ServerResponse>();
 
-function emitResponse(message: NetworkMessage) {
-  const ctx = contexts.get(message.messageId);
-  if (!ctx) return;
+function emitResponse(message: MonorepoMessage) {
+  const response = responses.get(message.messageId);
+  if (!response) return;
 
-  ctx.res.setHeader("Content-Type", "application/json");
-  ctx.res.end(JSON.stringify(message));
-  contexts.delete(message.messageId);
+  response.setHeader("Content-Type", "application/json");
+  response.end(JSON.stringify(message));
+  responses.delete(message.messageId);
 }
 
 export const SERVER_CHANNEL = SERVER.channelBuilder()
   .emitsTo(CLIENT, emitResponse)
   .emitsTo(UI, emitResponse)
-  .receivesFrom(CLIENT, (next) => {
-    const server = http.createServer((req, res) => {
-      getHttpBody(req).then((message: NetworkMessage) => {
-        contexts.set(message.messageId, { req, res });
+  .listens((next) => {
+    const server = http.createServer(async (req, res) => {
+      try {
+        const message = await getHttpBody(req);
+        if (message.from !== CLIENT.name && message.from !== UI.name) {
+          res.writeHead(400).end("Unknown side");
+          return;
+        }
+        responses.set(message.messageId, res);
         next(message);
-      });
+        if (message.type === "emit") {
+          res.writeHead(204).end();
+          responses.delete(message.messageId);
+        }
+      } catch {
+        res.writeHead(400).end("Invalid request");
+      }
     });
 
     server.listen(3000);
@@ -38,21 +42,18 @@ export const SERVER_CHANNEL = SERVER.channelBuilder()
       server.close();
     };
   })
-  .startListening();
+  .begin();
 
 // ----------- Message Handlers
 
-const users = {
+const users: Record<string, { id: string; name: string; present: boolean }> = {
   "USER-1": { id: "USER-1", name: "User 1", present: false },
   "USER-2": { id: "USER-2", name: "User 2", present: true },
 };
 
-SERVER_CHANNEL.registerMessageHandler(
+SERVER_CHANNEL.registerRequestHandler(
   "fetchUser",
-  (userId, _, { messageId }) => {
-    const ctx = contexts.get(messageId);
-    if (!ctx) throw new Error("Context is not set...");
-
+  (userId) => {
     const user = users[userId];
 
     return (
@@ -64,14 +65,8 @@ SERVER_CHANNEL.registerMessageHandler(
   }
 );
 
-SERVER_CHANNEL.registerMessageHandler("getServerTime", () => Date.now());
+SERVER_CHANNEL.registerRequestHandler("getServerTime", () => Date.now());
 
-SERVER_CHANNEL.registerMessageHandler("markPresence", async (online) => {
-  return new Promise<void>((resolve) => {
-    // Pseudo-delay to demonstrate async message handler
-    setTimeout(() => {
-      users["USER-1"].present = online;
-      resolve();
-    }, 2000);
-  });
+SERVER_CHANNEL.subscribeListener("markPresence", (online) => {
+  users["USER-1"].present = online;
 });

@@ -1,7 +1,7 @@
-import { NetworkMessage } from "../types";
+import { MonorepoMessage } from "../types";
 
 export class NetworkError extends Error {
-  constructor(message: NetworkMessage) {
+  constructor(message: MonorepoMessage) {
     super(message.payload[0]);
   }
 }

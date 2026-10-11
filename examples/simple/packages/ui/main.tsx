@@ -4,14 +4,14 @@ import { Networker } from "../../../../src";
 import { SERVER, UI } from "../../common/networkSides";
 import { UI_CHANNEL } from "./networkChannel";
 
-Networker.initialize(UI, UI_CHANNEL);
+Networker.initialize(UI);
 
 console.log("We're at", Networker.getCurrentSide().name);
 
-UI_CHANNEL.emit(SERVER, "markPresence", [true]);
+UI_CHANNEL.emit(SERVER, "markPresence", true);
 
 // This one corresponds to SERVER's `getServerTime(): number;` event
-UI_CHANNEL.request(SERVER, "getServerTime", []).then((serverTime) => {
+UI_CHANNEL.request(SERVER, "getServerTime").then((serverTime) => {
   console.log('Server responded with "' + serverTime + '" !');
 });
 
@@ -28,9 +28,9 @@ function App() {
   const focusHistory = useRef<string[]>([]);
 
   useEffect(() => {
-    return UI_CHANNEL.subscribe("focusOnElement", (elementId) => {
+    return UI_CHANNEL.subscribeListener("focusOnElement", (elementId) => {
       focusHistory.current.push(elementId);
-      document.getElementById(elementId).focus();
+      document.getElementById(elementId)?.focus();
     });
   }, []);
 

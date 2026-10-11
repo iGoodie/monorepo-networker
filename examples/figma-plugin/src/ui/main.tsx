@@ -4,7 +4,7 @@ import ReactDOM from "react-dom/client";
 import { Networker } from "../../../../src";
 import { UI_CHANNEL } from "./networkChannel";
 
-Networker.initialize(UI, UI_CHANNEL);
+Networker.initialize(UI);
 
 const rootElement = document.getElementById("root") as HTMLElement;
 const root = ReactDOM.createRoot(rootElement);
@@ -24,14 +24,15 @@ function App() {
     const rectId = await UI_CHANNEL.request(
       PLUGIN,
       "createRectangle",
-      [100, 100]
+      100,
+      100
     );
 
     console.log("Created rect with id", rectId);
   };
 
   useEffect(() => {
-    return UI_CHANNEL.subscribe("focusOnElement", (elementId) => {
+    return UI_CHANNEL.subscribeListener("focusOnElement", (elementId) => {
       focusHistory.current.push(elementId);
       document.getElementById(elementId)?.focus();
     });

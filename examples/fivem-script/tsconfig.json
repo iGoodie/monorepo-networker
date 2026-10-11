@@ -1,8 +1,8 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "module": "ES2022",
-    "moduleResolution": "Node",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
     "useDefineForClassFields": true,
     "skipLibCheck": true,
     "esModuleInterop": true,
@@ -11,13 +11,13 @@
     "resolveJsonModule": true,
     "isolatedModules": false,
     "noEmit": true,
+    "types": [],
     "jsx": "react-jsx",
-    "baseUrl": "./",
     "paths": {
-      "@common/*": ["my_resource/common/*"],
-      "@nui/*": ["my_resource/nui/*"],
-      "@client/*": ["my_resource/client/*"],
-      "@server/*": ["my_resource/server/*"]
+      "@common/*": ["./my_resource/common/*"],
+      "@nui/*": ["./my_resource/nui/*"],
+      "@client/*": ["./my_resource/client/*"],
+      "@server/*": ["./my_resource/server/*"]
     }
   },
   "include": ["my_resource/**/*"]

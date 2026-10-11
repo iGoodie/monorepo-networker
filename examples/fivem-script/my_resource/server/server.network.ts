@@ -1,37 +1,38 @@
-import { NetworkMessage } from "../../../../src";
+import type { MonorepoMessage } from "../../../../src";
 import { CLIENT, SERVER } from "../common/networkSides";
 
+const requestPlayers = new Map<string, number>();
+
+export function createPlayerChannel(playerId: string | number) {
+  return SERVER.channelBuilder()
+    .emitsTo(CLIENT, (message) => {
+      emitNet("__MonorepoNetworker_serverToClientIpc", playerId, message);
+    })
+    .begin();
+}
+
 export const SERVER_CHANNEL = SERVER.channelBuilder()
-  .emitsTo(SERVER, (message, metadata: { resourceName: string }) => {
-    emit("__MonorepoNetworker_serverIpc", metadata.resourceName, message);
+  .emitsTo(CLIENT, (message) => {
+    const playerId = requestPlayers.get(message.messageId);
+    if (playerId == null) return;
+    emitNet("__MonorepoNetworker_serverToClientIpc", playerId, message);
+    requestPlayers.delete(message.messageId);
   })
-  .emitsTo(CLIENT, (message, metadata: { clientId: number | string }) => {
-    emitNet("__MonorepoNetworker_serverToClientIpc", metadata.clientId, [
-      message,
-    ]);
-  })
-  .receivesFrom(CLIENT, (next) => {
+  .listensTo(CLIENT, (next) => {
     onNet(
       "__MonorepoNetworker_clientToServerIpc",
-      (message: NetworkMessage) => {
-        next(message, { clientId: global.source });
+      (message: MonorepoMessage) => {
+        requestPlayers.set(message.messageId, global.source);
+        next(message);
+        if (message.type === "emit") requestPlayers.delete(message.messageId);
       }
     );
   })
-  .receivesFrom(SERVER, (next) => {
-    on(
-      "__MonorepoNetworker_serverIpc",
-      (targetResource: string, message: NetworkMessage) => {
-        if (targetResource === GetCurrentResourceName()) {
-          next(message, { resourceName: GetCurrentResourceName() });
-        }
-      }
-    );
-  })
-  .startListening();
+  .begin();
 
 // ----------- Message Handlers
 
-SERVER_CHANNEL.registerMessageHandler("fetchPlayerLocation", () => {
-  return GetEntityCoords(global.source) as [number, number];
+SERVER_CHANNEL.registerRequestHandler("fetchPlayerLocation", () => {
+  const [x, y] = GetEntityCoords(GetPlayerPed(String(global.source)));
+  return [x, y];
 });

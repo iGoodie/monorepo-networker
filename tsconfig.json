@@ -1,9 +1,9 @@
 {
   "compilerOptions": {
     "target": "ES2017",
-    "module": "ES6",
+    "module": "ESNext",
     "useDefineForClassFields": true,
-    "moduleResolution": "Node",
+    "moduleResolution": "Bundler",
     "strict": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
@@ -13,7 +13,7 @@
     "noUnusedParameters": true,
     "noImplicitReturns": true,
     "skipLibCheck": true,
-    "typeRoots": ["./node_modules/@types/", "./node_modules/@figma"]
+    "types": ["node"]
   },
   "include": ["src"],
   "exclude": ["examples/**/*"]
