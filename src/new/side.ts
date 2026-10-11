@@ -1,10 +1,10 @@
-import { NetworkChannel } from "./channel";
+import { NetworkChannelBuilder } from "./channel";
 import { NetworkEvents } from "./types";
 
 export class NetworkSide<TName extends string, TEvents extends NetworkEvents> {
   constructor(public name: TName) {}
 
-  channelBuilder(): NetworkChannel.Builder<TEvents> {
-    return new NetworkChannel.Builder<TEvents>(this);
+  channelBuilder(): NetworkChannelBuilder<TEvents> {
+    return new NetworkChannelBuilder<TEvents>(this);
   }
 }

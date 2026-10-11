@@ -57,44 +57,26 @@ function createScenario() {
     });
   }
 
-  // TODO: Replace with CLIENT.channelBuilder() when available
-  const CLIENT_CHANNEL = new NetworkChannel(
-    CLIENT,
-    new Map<string, NetworkChannel.Emitter>([
-      [
-        JS_SERVER.name,
-        (message) => {
-          deliverToJsServer(message, receiveJsServer, jsServerMessages);
-        },
-      ],
-      [RS_SERVER.name, rustEmitter],
-    ]),
-    [
-      (next) => {
-        receiveClient = next;
-        return () => {};
-      },
-    ],
-  );
+  const CLIENT_CHANNEL = CLIENT.channelBuilder()
+    .emitsTo(JS_SERVER, (message) => {
+      deliverToJsServer(message, receiveJsServer, jsServerMessages);
+    })
+    .emitsTo(RS_SERVER, rustEmitter)
+    .listensTo(JS_SERVER, (next) => {
+      receiveClient = next;
+      return () => {};
+    })
+    .begin();
 
-  // TODO: Replace with JS_SERVER.channelBuilder() when available
-  const JS_SERVER_CHANNEL = new NetworkChannel(
-    JS_SERVER,
-    new Map<string, NetworkChannel.Emitter>([
-      [
-        CLIENT.name,
-        (message) => {
-          deliverToJsServer(message, receiveClient, clientMessages);
-        },
-      ],
-    ]),
-    [
-      (next) => {
-        receiveJsServer = next;
-        return () => {};
-      },
-    ],
-  );
+  const JS_SERVER_CHANNEL = JS_SERVER.channelBuilder()
+    .emitsTo(CLIENT, (message) => {
+      deliverToJsServer(message, receiveClient, clientMessages);
+    })
+    .listensTo(CLIENT, (next) => {
+      receiveJsServer = next;
+      return () => {};
+    })
+    .begin();
 
   return {
     CLIENT,
@@ -158,6 +140,211 @@ function expectRustRegisterAccountInvocation(
   expect(scenario.jsServerMessages).toEqual([]);
   expect(scenario.clientMessages).toEqual([]);
 }
+
+describe("NetworkChannelBuilder", () => {
+  it("starts a shared listener at begin and accepts emits from multiple sides", () => {
+    const scenario = createScenario();
+    let receive!: (message: MonorepoMessage) => void;
+    const transport = vi.fn((next: (message: MonorepoMessage) => void) => {
+      receive = next;
+      return () => {};
+    });
+    const builder = scenario.CLIENT.channelBuilder();
+
+    expect(builder.listens(transport)).toBe(builder);
+    expect(transport).not.toHaveBeenCalled();
+    const channel = builder.begin();
+    const listener = vi.fn(() => undefined);
+    channel.subscribeListener("showNotification", listener);
+
+    expect(transport).toHaveBeenCalledTimes(1);
+    for (const side of [scenario.JS_SERVER, scenario.RS_SERVER]) {
+      const message: MonorepoMessage = {
+        messageId: `shared-${side.name}`,
+        type: "emit",
+        from: side.name,
+        eventName: "showNotification",
+        payload: [side.name],
+      };
+      receive(message);
+      expect(listener).toHaveBeenLastCalledWith(side.name, message);
+    }
+    expect(listener).toHaveBeenCalledTimes(2);
+  });
+
+  it("dispatches shared-transport requests and responds to their source sides", () => {
+    const scenario = createScenario();
+    let receive!: (message: MonorepoMessage) => void;
+    const jsResponse = vi.fn();
+    const rustResponse = vi.fn();
+    const channel = scenario.CLIENT.channelBuilder()
+      .emitsTo(scenario.JS_SERVER, jsResponse)
+      .emitsTo(scenario.RS_SERVER, rustResponse)
+      .listens((next) => {
+        receive = next;
+        return () => {};
+      })
+      .begin();
+    channel.registerRequestHandler("reportMemoryUsage", () => 9999);
+
+    for (const [side, response] of [
+      [scenario.JS_SERVER, jsResponse],
+      [scenario.RS_SERVER, rustResponse],
+    ] as const) {
+      const message: MonorepoMessage = {
+        messageId: `shared-request-${side.name}`,
+        type: "request",
+        from: side.name,
+        eventName: "reportMemoryUsage",
+        payload: [],
+      };
+      receive(message);
+      expect(response).toHaveBeenCalledTimes(1);
+      expect(response).toHaveBeenCalledWith({
+        ...message,
+        type: "success_response",
+        from: scenario.CLIENT.name,
+        payload: [9999],
+      });
+    }
+  });
+
+  it("warns and ignores shared-transport requests from unknown sides", () => {
+    const scenario = createScenario();
+    let receive!: (message: MonorepoMessage) => void;
+    const channel = scenario.CLIENT.channelBuilder()
+      .listens((next) => {
+        receive = next;
+        return () => {};
+      })
+      .begin();
+    const handler = vi.fn(() => 9999);
+    channel.registerRequestHandler("reportMemoryUsage", handler);
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      expect(() =>
+        receive({
+          messageId: "unknown-shared-request",
+          type: "request",
+          from: "unregistered-side",
+          eventName: "reportMemoryUsage",
+          payload: [],
+        }),
+      ).not.toThrow();
+      expect(handler).not.toHaveBeenCalled();
+      expect(warning).toHaveBeenCalledWith(
+        "Received request from unknown side: unregistered-side",
+      );
+    } finally {
+      warning.mockRestore();
+    }
+  });
+
+  it("starts all network listeners only when begin is called", () => {
+    const CLIENT = Networker.createSide(
+      `builder-client-${++scenarioId}`,
+    ).whichListens<{ showNotification: (message: string) => void }>();
+    const firstListener = vi.fn(() => () => {});
+    const secondListener = vi.fn(() => () => {});
+    const builder = CLIENT.channelBuilder();
+
+    expect(builder.listensTo(CLIENT, firstListener)).toBe(builder);
+    expect(builder.listensTo(CLIENT, secondListener)).toBe(builder);
+    expect(firstListener).not.toHaveBeenCalled();
+    expect(secondListener).not.toHaveBeenCalled();
+
+    const channel = builder.begin();
+
+    expect(channel).toBeInstanceOf(NetworkChannel);
+    expect(channel.hostSide).toBe(CLIENT);
+    expect(firstListener).toHaveBeenCalledTimes(1);
+    expect(secondListener).toHaveBeenCalledTimes(1);
+    expect(firstListener).toHaveBeenCalledWith(expect.any(Function));
+    expect(secondListener).toHaveBeenCalledWith(expect.any(Function));
+  });
+
+  it("keeps existing channels isolated from later emitter changes", () => {
+    const scenario = createScenario();
+    const firstEmitter = vi.fn();
+    const secondEmitter = vi.fn();
+    const builder = scenario.CLIENT.channelBuilder();
+
+    expect(builder.emitsTo(scenario.JS_SERVER, firstEmitter)).toBe(builder);
+    const firstChannel = builder.begin();
+    builder.emitsTo(scenario.JS_SERVER, secondEmitter);
+    const secondChannel = builder.begin();
+
+    firstChannel.emit(scenario.JS_SERVER, "getServerTime");
+    secondChannel.emit(scenario.JS_SERVER, "getServerTime");
+
+    expect(firstEmitter).toHaveBeenCalledTimes(1);
+    expect(secondEmitter).toHaveBeenCalledTimes(1);
+  });
+
+  it("routes each listener only from its configured side", () => {
+    const scenario = createScenario();
+    const receivers: ((message: MonorepoMessage) => void)[] = [];
+    const builder = scenario.CLIENT.channelBuilder();
+    for (const targetSide of [scenario.JS_SERVER, scenario.RS_SERVER]) {
+      builder.listensTo(targetSide, (next) => {
+        receivers.push(next);
+        return () => {};
+      });
+    }
+    const channel = builder.begin();
+    const listener = vi.fn(() => undefined);
+    channel.subscribeListener("showNotification", listener);
+    const message: MonorepoMessage = {
+      messageId: "side-filter-test",
+      type: "emit",
+      from: scenario.JS_SERVER.name,
+      eventName: "showNotification",
+      payload: ["hello"],
+    };
+
+    receivers[1](message);
+    expect(listener).not.toHaveBeenCalled();
+    receivers[0](message);
+    receivers[0]({ ...message, from: scenario.RS_SERVER.name });
+    receivers[1]({ ...message, from: scenario.RS_SERVER.name });
+
+    expect(listener).toHaveBeenCalledTimes(2);
+    expect(listener).toHaveBeenNthCalledWith(1, "hello", message);
+    expect(listener).toHaveBeenNthCalledWith(2, "hello", {
+      ...message,
+      from: scenario.RS_SERVER.name,
+    });
+  });
+
+  it("preserves source filtering when constructing a channel directly", () => {
+    const scenario = createScenario();
+    let receive!: (message: MonorepoMessage) => void;
+    const channel = new NetworkChannel(scenario.CLIENT, new Map(), [
+      {
+        targetSide: scenario.JS_SERVER,
+        listener: (next) => {
+          receive = next;
+          return () => {};
+        },
+      },
+    ]);
+    const listener = vi.fn(() => undefined);
+    channel.subscribeListener("showNotification", listener);
+    const message: MonorepoMessage = {
+      messageId: "direct-side-filter-test",
+      type: "emit",
+      from: scenario.RS_SERVER.name,
+      eventName: "showNotification",
+      payload: ["hello"],
+    };
+
+    receive(message);
+    expect(listener).not.toHaveBeenCalled();
+    receive({ ...message, from: scenario.JS_SERVER.name });
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe("NetworkChannel.emit", () => {
   it("delivers an emit message to JS_SERVER through next without a response", async () => {

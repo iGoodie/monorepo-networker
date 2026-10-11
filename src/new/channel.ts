@@ -8,7 +8,12 @@ import { MonorepoMessage, NetworkEvents } from "./types";
 export namespace NetworkChannel {
   export type NetworkListener = (
     next: (inboundMessage: MonorepoMessage) => void,
-  ) => () => void | void;
+  ) => (() => void) | void;
+
+  export type NetworkListenerRegistration = {
+    targetSide?: NetworkSide<any, any>;
+    listener: NetworkListener;
+  };
 
   /**
    * - When returns `undefined` -> emitter meant the message is sent without an immediate response, MonorepoNetworker will handle it asynchronously.
@@ -77,15 +82,21 @@ export class NetworkChannel<TEvents extends NetworkEvents> {
   constructor(
     public readonly hostSide: NetworkSide<any, TEvents>,
     protected readonly sideEmitters: Map<string, NetworkChannel.Emitter>,
-    protected readonly networkListeners: NetworkChannel.NetworkListener[],
+    protected readonly networkListeners: NetworkChannel.NetworkListenerRegistration[],
   ) {
     this.beginNetworkListeners();
   }
 
   protected beginNetworkListeners() {
-    for (const listener of this.networkListeners) {
+    for (const { targetSide, listener } of this.networkListeners) {
       const cleanup = listener((message: MonorepoMessage) => {
-        this.onMessageReceived(message);
+        if (targetSide == null || message.from === targetSide.name) {
+          this.onMessageReceived(message);
+        } else {
+          console.warn(
+            `Received message from unexpected side: ${message.from}. Expected: ${targetSide.name}`,
+          );
+        }
       });
       if (cleanup != null) {
         this.cleanupCallbacks.push(cleanup);
@@ -279,9 +290,14 @@ export class NetworkChannel<TEvents extends NetworkEvents> {
   }
 
   protected onRequestReceived(message: MonorepoMessage) {
-    this.processEventListeners(message);
+    const fromSide = Networker.getSideByName(message.from);
 
-    const fromSide = Networker.getSideByName(message.from)!;
+    if (fromSide == null) {
+      console.warn(`Received request from unknown side: ${message.from}`);
+      return;
+    }
+
+    this.processEventListeners(message);
 
     const emit = this.getEmitter(fromSide);
 
@@ -337,7 +353,45 @@ export class NetworkChannel<TEvents extends NetworkEvents> {
     this.requestPromises.delete(message.messageId);
   }
 
-  static Builder = class<TEvents extends NetworkEvents> {
-    constructor(public readonly hostSide: NetworkSide<any, TEvents>) {}
-  };
+  public close() {
+    for (const cleanup of this.cleanupCallbacks) {
+      cleanup();
+    }
+    this.cleanupCallbacks = [];
+  }
+}
+
+export class NetworkChannelBuilder<TEvents extends NetworkEvents> {
+  protected readonly sideEmitters = new Map<string, NetworkChannel.Emitter>();
+  protected readonly networkListeners: NetworkChannel.NetworkListenerRegistration[] =
+    [];
+
+  constructor(public readonly hostSide: NetworkSide<any, TEvents>) {}
+
+  public emitsTo(
+    targetSide: NetworkSide<any, any>,
+    emitter: NetworkChannel.Emitter,
+  ) {
+    this.sideEmitters.set(targetSide.name, emitter);
+    return this;
+  }
+
+  public listensTo(
+    targetSide: NetworkSide<any, any>,
+    listener: NetworkChannel.NetworkListener,
+  ) {
+    this.networkListeners.push({ targetSide, listener });
+    return this;
+  }
+
+  public listens(listener: NetworkChannel.NetworkListener) {
+    this.networkListeners.push({ listener });
+    return this;
+  }
+
+  public begin(): NetworkChannel<TEvents> {
+    return new NetworkChannel(this.hostSide, new Map(this.sideEmitters), [
+      ...this.networkListeners,
+    ]);
+  }
 }
